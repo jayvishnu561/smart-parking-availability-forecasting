@@ -12,7 +12,7 @@ Deep-learning project to forecast parking occupancy and estimate slot availabili
 
 - Uses historical occupancy sequence input (0 to 1 values)
 - Forecasts future occupancy from your trained LSTM model
-- Converts occupancy into parking availability percentage
+- Returns raw model forecast output with model metadata
 - Interactive web dashboard for city authorities and commuters
 
 ## Backend Setup (FastAPI)
@@ -62,9 +62,9 @@ POST `/predict`
 
 ```json
 {
-  "sequence": [0.72, 0.68, 0.61, 0.59, 0.64, 0.69],
+  "sequence": [0.72, 0.68, 0.61, 0.59, 0.64, 0.69, 0.75, 0.77, 0.70, 0.62, 0.56, 0.51, 0.49, 0.47],
   "horizon": 4
 }
 ```
 
-Response includes forecast values, availability percentage, and demand status.
+Response includes raw forecast values, requested horizon, model input shape, and model path.

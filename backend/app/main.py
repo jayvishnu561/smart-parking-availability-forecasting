@@ -2,49 +2,28 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .history_service import HistoryService
 from .model_service import ModelService
 
 
 ZONE_CAPACITY = {
-    "A": 120,
-    "B": 90,
-    "C": 70,
-    "D": 55,
+    "mall": 120,
+    "commercial": 90,
+    "office": 70,
+    "residential": 55,
+    "hospital": 85,
 }
-
-VEHICLE_OCCUPANCY_FACTOR = {
-    "car": 1.0,
-    "bike": 0.65,
-    "ev": 0.95,
-    "truck": 1.25,
-}
-
-VEHICLE_BASE_FEE = {
-    "car": 40.0,
-    "bike": 20.0,
-    "ev": 35.0,
-    "truck": 70.0,
-}
-
-
-def _time_factor(time_of_day: str) -> float:
-    hour = int(time_of_day.split(":", maxsplit=1)[0])
-    if 7 <= hour <= 10 or 17 <= hour <= 20:
-        return 1.15
-    if 0 <= hour <= 5:
-        return 0.82
-    return 1.0
 
 
 class ForecastRequest(BaseModel):
-    sequence: list[float] = Field(
-        ...,
-        min_length=3,
-        description="Historical occupancy sequence values in range [0, 1]",
+    sequence: list[float] | None = Field(
+        default=None,
+        description="Optional historical occupancy sequence values in range [0, 1]",
     )
-    time_of_day: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    # Accept 12-hour clock like "12:34 PM" (case-insensitive, optional space)
+    time_of_day: str = Field(..., pattern=r"^(?i)(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$")
     vehicle_type: str = Field(..., pattern=r"^(car|bike|ev|truck)$")
-    zone: str = Field(..., pattern=r"^(A|B|C|D)$")
+    zone: str = Field(..., pattern=r"^(mall|commercial|office|residential|hospital)$")
     horizon: int = Field(default=1, ge=1, le=24)
 
 
@@ -52,7 +31,6 @@ class ForecastResponse(BaseModel):
     forecast: list[float]
     availability_percent: float
     available_slots: int
-    estimated_fee: float
     zone: str
     vehicle_type: str
     requested_time: str
@@ -76,6 +54,7 @@ app.add_middleware(
 )
 
 service = ModelService()
+history_service = HistoryService()
 
 
 @app.get("/health")
@@ -89,24 +68,45 @@ def health() -> dict[str, str | list[int | None]]:
 
 @app.post("/predict", response_model=ForecastResponse)
 def predict(payload: ForecastRequest) -> ForecastResponse:
+    if payload.sequence is not None and len(payload.sequence) < 3:
+        raise HTTPException(status_code=400, detail="Sequence length must be at least 3 values.")
+
+    # Normalize 12-hour time string (e.g. "12:30 PM") to 24-hour "HH:MM" for internal use
+    from datetime import datetime
+
+    original_time = payload.time_of_day
     try:
-        forecast = service.predict(payload.sequence, payload.horizon)
+        dt = datetime.strptime(payload.time_of_day.strip().upper(), "%I:%M %p")
+        normalized_time = dt.strftime("%H:%M")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid time_of_day format: {payload.time_of_day}") from exc
+
+    sequence = payload.sequence
+    if sequence is None:
+        required_length = service.required_sequence_length()
+        try:
+            sequence = history_service.get_sequence(
+                zone=payload.zone,
+                vehicle_type=payload.vehicle_type,
+                time_of_day=normalized_time,
+                required_length=required_length,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        forecast = service.predict(sequence, payload.horizon)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Inference failed: {exc}") from exc
 
     mean_occupancy = sum(forecast) / len(forecast)
-    mean_occupancy *= VEHICLE_OCCUPANCY_FACTOR[payload.vehicle_type]
-    mean_occupancy *= _time_factor(payload.time_of_day)
     mean_occupancy = min(max(mean_occupancy, 0.0), 1.0)
 
     availability_percent = round((1 - mean_occupancy) * 100, 2)
     capacity = ZONE_CAPACITY[payload.zone]
     available_slots = max(int(round(capacity * (1 - mean_occupancy))), 0)
-
-    dynamic_fee = VEHICLE_BASE_FEE[payload.vehicle_type] * (1 + mean_occupancy * 0.7)
-    estimated_fee = round(dynamic_fee, 2)
 
     if availability_percent >= 60:
         status = "High availability"
@@ -119,10 +119,9 @@ def predict(payload: ForecastRequest) -> ForecastResponse:
         forecast=forecast,
         availability_percent=availability_percent,
         available_slots=available_slots,
-        estimated_fee=estimated_fee,
         zone=payload.zone,
         vehicle_type=payload.vehicle_type,
-        requested_time=payload.time_of_day,
+        requested_time=original_time,
         status=status,
         model_input_shape=service.input_shape,
         model_path=service.model_path,
