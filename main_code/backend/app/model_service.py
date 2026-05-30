@@ -20,12 +20,23 @@ if not hasattr(tf, "keras"):
 
 class ModelService:
     def __init__(self) -> None:
-        root = Path(__file__).resolve().parents[2]
-        default_model_path = root / "lstm_parking_model.keras"
-        model_path = Path(os.getenv("MODEL_PATH", str(default_model_path)))
+        project_root = Path(__file__).resolve().parents[3]
+        candidate_paths = [
+            project_root / "dataset" / "lstm_parking_model.keras",
+            project_root / "lstm_parking_model.keras",
+            Path(__file__).resolve().parents[2] / "lstm_parking_model.keras",
+        ]
 
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model file not found: {model_path}")
+        env_model_path = os.getenv("MODEL_PATH")
+        if env_model_path:
+            candidate_paths.insert(0, Path(env_model_path))
+
+        model_path = next((path for path in candidate_paths if path.exists()), None)
+        if model_path is None:
+            raise FileNotFoundError(
+                "Model file not found. Checked: "
+                + ", ".join(str(path) for path in candidate_paths)
+            )
 
         self.model_path = str(model_path)
 

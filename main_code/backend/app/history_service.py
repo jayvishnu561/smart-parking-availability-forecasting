@@ -22,11 +22,19 @@ class HistoryPoint:
 
 class HistoryService:
     def __init__(self) -> None:
-        root = Path(__file__).resolve().parents[2]
-        self.dataset_path = root / "smart_parking_usage_occupancy_analytics.csv"
+        project_root = Path(__file__).resolve().parents[3]
+        candidate_paths = [
+            project_root / "dataset" / "smart_parking_usage_occupancy_analytics.csv",
+            project_root / "smart_parking_usage_occupancy_analytics.csv",
+            Path(__file__).resolve().parents[2] / "smart_parking_usage_occupancy_analytics.csv",
+        ]
 
-        if not self.dataset_path.exists():
-            raise FileNotFoundError(f"Dataset file not found: {self.dataset_path}")
+        self.dataset_path = next((path for path in candidate_paths if path.exists()), None)
+        if self.dataset_path is None:
+            raise FileNotFoundError(
+                "Dataset file not found. Checked: "
+                + ", ".join(str(path) for path in candidate_paths)
+            )
 
         self._rows = self._load_rows()
 

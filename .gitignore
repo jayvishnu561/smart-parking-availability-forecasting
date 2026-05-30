@@ -2,5 +2,9 @@
 .venv/
 .venv310/
 frontend/node_modules/
+main_code/frontend/node_modules/
+main_code/frontend/.vite/
 __pycache__/
+main_code/backend/app/__pycache__/
+main_code/backend/app/carparking.ipynb
 *.pyc
